@@ -30,8 +30,17 @@ async def slack_events(req: Request):
                 headers={"Content-Type": "application/json"},
                 json={"query": text}
             )
-            data = resp.json()
-            answer = data.get("answer", "⚠️ erro ao consultar Langflow")
+            # 👇 ADICIONADO: imprime o conteúdo bruto da resposta do Langflow
+            print("Resposta bruta do Langflow:", resp.text)
+
+            # ⚠️ Em vez de tentar json() direto, vamos usar um try para evitar crash
+            try:
+                data = resp.json()
+                answer = data.get("answer", "⚠️ erro ao consultar Langflow")
+            except Exception as e:
+                print("Erro ao decodificar JSON:", e)
+                answer = "⚠️ erro ao decodificar resposta do Langflow"
+
     except Exception as e:
         print("Erro ao consultar Langflow:", e)
         answer = "⚠️ erro ao consultar Langflow"
