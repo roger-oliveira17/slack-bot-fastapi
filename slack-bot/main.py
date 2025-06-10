@@ -61,7 +61,7 @@ async def slack_events(req: Request):
     try:
         async with httpx.AsyncClient() as client:
             await client.post(
-                "https://hooks.slack.com/services/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",
+                "https://slack.com/api/chat.postMessage",
                 headers={
                     "Content-Type": "application/json",
                     "Authorization": f"Bearer {SLACK_BOT_TOKEN}"
