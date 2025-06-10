@@ -8,18 +8,15 @@ import httpx
 
 app = FastAPI()
 
-# ── Variáveis de ambiente ──────────────────────────────────────────────────────
-SLACK_BOT_TOKEN      = os.environ["SLACK_BOT_TOKEN"]
+SLACK_BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]
 SLACK_SIGNING_SECRET = os.environ["SLACK_SIGNING_SECRET"].encode()
-LANGFLOW_API_URL     = os.environ.get(
+LANGFLOW_API_URL = os.environ.get(
     "LANGFLOW_API_URL",
     "https://api.langflow.astra.datastax.com/lf/252a6775-893d-49c1-bcb7-e25cb3be441a/api/v1/run/f933dc8c-e6fb-4db5-b496-2d23b8770cd9?stream=false"
 )
-LANGFLOW_API_TOKEN   = os.environ["LANGFLOW_API_TOKEN"]
+LANGFLOW_API_TOKEN = os.environ["LANGFLOW_API_TOKEN"]
 
-# ── Utilitário de verificação de assinatura do Slack ───────────────────────────
 def verify_slack_signature(request: Request, body: bytes) -> None:
-    """Lança 401 se a assinatura do Slack não bater."""
     timestamp = request.headers.get("X-Slack-Request-Timestamp", "")
     sig_basestring = f"v0:{timestamp}:{body.decode()}".encode()
     my_signature = "v0=" + hmac.new(
@@ -29,27 +26,30 @@ def verify_slack_signature(request: Request, body: bytes) -> None:
     if not hmac.compare_digest(my_signature, slack_signature):
         raise HTTPException(status_code=401, detail="Invalid Slack signature")
 
-# ── Endpoint principal ─────────────────────────────────────────────────────────
 @app.post("/slack/events")
 async def slack_events(request: Request):
-    # ▸ 0. Valida assinatura
     raw_body = await request.body()
     verify_slack_signature(request, raw_body)
 
-    # ▸ 0A. Ignora replays automáticos do Slack (retry_num)
+    # Ignora replays automáticos do Slack
     if request.headers.get("X-Slack-Retry-Num"):
         return {"ok": True}
 
     payload = json.loads(raw_body)
     print("Payload recebido do Slack:", payload)
 
-    # ▸ 1. URL Verification
+    # URL verification
     if payload.get("type") == "url_verification":
         return {"challenge": payload["challenge"]}
 
-    # ▸ 2. Extrai dados e ignora eventos gerados pelo próprio bot
     event = payload.get("event", {})
     bot_user_id = (payload.get("authorizations") or [{}])[0].get("user_id", "")
+
+    # ▸ 1. Ignora tudo que não for app_mention
+    if event.get("type") != "app_mention":
+        return {"ok": True}
+
+    # ▸ 2. Ignora mensagens do próprio bot
     if (
         event.get("bot_id")
         or event.get("subtype") == "bot_message"
@@ -62,7 +62,7 @@ async def slack_events(request: Request):
     if bot_user_id:
         text = text.replace(f"<@{bot_user_id}>", "").strip() or "geral"
 
-    # ▸ 4. Envia consulta ao Langflow
+    # ▸ 4. Consulta Langflow
     langflow_payload = {
         "input_value": text,
         "output_type": "chat",
@@ -71,9 +71,9 @@ async def slack_events(request: Request):
     }
 
     try:
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=60) as client:  # aumentei timeout
             lf_resp = await client.post(
-                LANGFLOW_API_URL,  # já tem ?stream=false
+                LANGFLOW_API_URL,
                 headers={
                     "Content-Type": "application/json",
                     "Authorization": f"Bearer {LANGFLOW_API_TOKEN}",
@@ -89,7 +89,7 @@ async def slack_events(request: Request):
         traceback.print_exception(exc, file=sys.stderr)
         answer = f"⚠️ Erro ao consultar Langflow: {exc}"
 
-    # ▸ 5. Posta resposta no Slack (mesmo thread, se existir)
+    # ▸ 5. Posta a resposta no Slack
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             slack_resp = await client.post(
@@ -110,8 +110,6 @@ async def slack_events(request: Request):
 
     return {"status": "ok"}
 
-# ── Health-check opcional ──────────────────────────────────────────────────────
 @app.get("/")
 async def root():
     return {"status": "running"}
-
