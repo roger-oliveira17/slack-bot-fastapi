@@ -13,7 +13,7 @@ SLACK_BOT_TOKEN      = os.environ["SLACK_BOT_TOKEN"]
 SLACK_SIGNING_SECRET = os.environ["SLACK_SIGNING_SECRET"].encode()
 LANGFLOW_API_URL     = os.environ.get(
     "LANGFLOW_API_URL",
-    "https://api.langflow.astra.datastax.com/lf/252a6775-893d-49c1-bcb7-e25cb3be441a/api/v1/run/f933dc8c-e6fb-4db5-b496-2d23b8770cd9"
+    "https://api.langflow.astra.datastax.com/lf/252a6775-893d-49c1-bcb7-e25cb3be441a/api/v1/run/f933dc8c-e6fb-4db5-b496-2d23b8770cd9?stream=false"
 )
 LANGFLOW_API_TOKEN   = os.environ["LANGFLOW_API_TOKEN"]
 
@@ -36,6 +36,10 @@ async def slack_events(request: Request):
     raw_body = await request.body()
     verify_slack_signature(request, raw_body)
 
+    # ▸ 0A. Ignora replays automáticos do Slack (retry_num)
+    if request.headers.get("X-Slack-Retry-Num"):
+        return {"ok": True}
+
     payload = json.loads(raw_body)
     print("Payload recebido do Slack:", payload)
 
@@ -43,39 +47,45 @@ async def slack_events(request: Request):
     if payload.get("type") == "url_verification":
         return {"challenge": payload["challenge"]}
 
-    # ▸ 2. Extrai texto da mensagem e limpa menção ao bot
+    # ▸ 2. Extrai dados e ignora eventos gerados pelo próprio bot
     event = payload.get("event", {})
-    text = (event.get("text") or "").strip()
     bot_user_id = (payload.get("authorizations") or [{}])[0].get("user_id", "")
+    if event.get("bot_id") or event.get("user") == bot_user_id:
+        return {"ok": True}  # ignora mensagens do bot e devolve 200
+
+    # ▸ 3. Limpa texto da menção ao bot
+    text = (event.get("text") or "").strip()
     if bot_user_id:
         text = text.replace(f"<@{bot_user_id}>", "").strip() or "geral"
 
-    # ▸ 3. Envia consulta ao Langflow
+    # ▸ 4. Envia consulta ao Langflow
     langflow_payload = {
         "input_value": text,
         "output_type": "chat",
         "input_type": "chat",
-        "session_id": event.get("user"),  # 1 sessão por usuário
+        "session_id": event.get("user"),
     }
 
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=60) as client:
             lf_resp = await client.post(
-                LANGFLOW_API_URL,
+                LANGFLOW_API_URL,  # já tem ?stream=false
                 headers={
                     "Content-Type": "application/json",
                     "Authorization": f"Bearer {LANGFLOW_API_TOKEN}",
+                    "Accept": "application/json",
                 },
                 json=langflow_payload,
             )
         print("Resposta bruta do Langflow:", lf_resp.text)
-        lf_json = lf_resp.json()
-        answer = lf_json.get("output") or "⚠️ Langflow não retornou resposta."
+        lf_resp.raise_for_status()
+        answer = lf_resp.json().get("output") or "⚠️ Langflow não retornou resposta."
     except Exception as exc:
-        print("Erro ao consultar Langflow:", exc)
-        answer = "⚠️ Erro ao consultar Langflow."
+        import traceback, sys
+        traceback.print_exception(exc, file=sys.stderr)
+        answer = f"⚠️ Erro ao consultar Langflow: {exc}"
 
-    # ▸ 4. Posta resposta no Slack (mesmo thread, se existir)
+    # ▸ 5. Posta resposta no Slack (mesmo thread, se existir)
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             slack_resp = await client.post(
@@ -95,3 +105,9 @@ async def slack_events(request: Request):
         print("Erro ao responder no Slack:", exc)
 
     return {"status": "ok"}
+
+# ── Health-check opcional ──────────────────────────────────────────────────────
+@app.get("/")
+async def root():
+    return {"status": "running"}
+
