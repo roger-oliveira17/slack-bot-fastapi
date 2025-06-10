@@ -5,12 +5,13 @@ import os
 app = FastAPI()
 
 SLACK_BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]
-LANGFLOW_API_URL = "https://langflow-api-v2.onrender.com/run"  # novo endpoint do Langflow
+# ⚠️ Ajustamos para o novo endpoint do Langflow
+LANGFLOW_API_URL = "https://langflow-api-v2.onrender.com/v1/run-flow"
 
 @app.post("/")
 async def slack_events(req: Request):
     payload = await req.json()
-    print("Payload:", payload)
+    print("Payload recebido do Slack:", payload)
 
     # 1️⃣ Valida o URL Verification do Slack
     if payload.get("type") == "url_verification":
@@ -28,22 +29,21 @@ async def slack_events(req: Request):
             resp = await client.post(
                 LANGFLOW_API_URL,
                 headers={"Content-Type": "application/json"},
-                json={"query": text}
+                json={"input": text}  # ⚠️ Mudamos de "query" para "input"
             )
-            # 👇 ADICIONADO: imprime o conteúdo bruto da resposta do Langflow
             print("Resposta bruta do Langflow:", resp.text)
 
-            # ⚠️ Em vez de tentar json() direto, vamos usar um try para evitar crash
+            # ⚠️ Ajustamos para "output" no JSON de resposta
             try:
                 data = resp.json()
-                answer = data.get("answer", "⚠️ erro ao consultar Langflow")
+                answer = data.get("output", "⚠️ Erro ao consultar Langflow")
             except Exception as e:
                 print("Erro ao decodificar JSON:", e)
-                answer = "⚠️ erro ao decodificar resposta do Langflow"
+                answer = "⚠️ Erro ao decodificar resposta do Langflow"
 
     except Exception as e:
         print("Erro ao consultar Langflow:", e)
-        answer = "⚠️ erro ao consultar Langflow"
+        answer = "⚠️ Erro ao consultar Langflow"
 
     # 4️⃣ Responde de volta no Slack
     try:
