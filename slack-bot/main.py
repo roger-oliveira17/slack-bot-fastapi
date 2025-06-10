@@ -50,8 +50,12 @@ async def slack_events(request: Request):
     # ▸ 2. Extrai dados e ignora eventos gerados pelo próprio bot
     event = payload.get("event", {})
     bot_user_id = (payload.get("authorizations") or [{}])[0].get("user_id", "")
-    if event.get("bot_id") or event.get("user") == bot_user_id:
-        return {"ok": True}  # ignora mensagens do bot e devolve 200
+    if (
+        event.get("bot_id")
+        or event.get("subtype") == "bot_message"
+        or event.get("user") == bot_user_id
+    ):
+        return {"ok": True}
 
     # ▸ 3. Limpa texto da menção ao bot
     text = (event.get("text") or "").strip()
